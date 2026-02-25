@@ -5,15 +5,10 @@ import os
 
 
 def heaviside_epsilon(z, epsilon=1.0):
-    """Regularized Heaviside: H(z) = 0.5*(1 + (2/pi)*arctan(z/epsilon))"""
     return 0.5 * (1.0 + (2.0 / np.pi) * np.arctan(z / epsilon))
 
 
 def compute_averages(u0, phi, epsilon=1.0):
-    """
-    c1 = mean intensity inside  (phi > 0, H ~ 1)
-    c2 = mean intensity outside (phi < 0, H ~ 0)
-    """
     H = heaviside_epsilon(phi, epsilon)
     num1 = np.sum(u0 * H)
     den1 = np.sum(H)
@@ -26,74 +21,39 @@ def compute_averages(u0, phi, epsilon=1.0):
 
 
 def curvature_central(phi):
-    """
-    Compute div(grad(phi)/|grad(phi)|) using central differences.
-    Numerically stable version with gradient magnitude clamping.
-    """
-    # Use np.gradient for central differences (handles boundaries)
     fy, fx = np.gradient(phi)
     mag = np.sqrt(fx**2 + fy**2 + 1e-8)
     nx = fx / mag
     ny = fy / mag
-
-    # Divergence of normalised gradient
     _, nxx = np.gradient(nx)
     nyy, _ = np.gradient(ny)
     return nxx + nyy
 
 
-def chan_vese(u0, phi0, mu=0.25, nu=0, lambda1=1.0, lambda2=1.0,
-             dt=1.0, epsilon=1.0, max_iter=300, tol=1e-4):
-    """
-    Chan-Vese active contour without edges.
-
-    Uses a numerically stable global update: the level set is evolved
-    everywhere and periodically clamped to prevent unbounded growth.
-
-    Convention: phi > 0 = inside, phi < 0 = outside.
-    """
+def chan_vese(u0, phi0, mu=0.25, nu=0, lambda1=1.0, lambda2=1.0, dt=1.0, epsilon=1.0, max_iter=300, tol=1e-4):
     phi = phi0.astype(np.float64).copy()
-    # Normalise phi to [-1, 1] range to start
     phi = phi / (np.abs(phi).max() + 1e-10)
     history = [phi.copy()]
 
     for it in range(max_iter):
         phi_old = phi.copy()
-
         c1, c2 = compute_averages(u0, phi, epsilon)
-
-        # Curvature (length regularisation)
         kappa = curvature_central(phi)
-
-        # Data fidelity: positive where pixel belongs inside
         data = -lambda1 * (u0 - c1)**2 + lambda2 * (u0 - c2)**2
-
-        # Evolution PDE
         dphi = dt * (mu * kappa - nu + data)
-
-        # Stability: limit max step per pixel
         max_step = np.abs(dphi).max()
-        if max_step > 0.5:
-            dphi = dphi * (0.5 / max_step)
-
+        if max_step > 0.5:dphi = dphi * (0.5 / max_step)
         phi = phi + dphi
-
-        # Neumann BC
         phi[0, :] = phi[1, :]
         phi[-1, :] = phi[-2, :]
         phi[:, 0] = phi[:, 1]
         phi[:, -1] = phi[:, -2]
-
-        # Clamp phi to prevent unbounded growth
         phi = np.clip(phi, -4.0, 4.0)
-
         change = np.sqrt(np.mean((phi - phi_old)**2))
-
         if it % 10 == 0:
             history.append(phi.copy())
         if it % 50 == 0:
-            print(f"  Iter {it:4d}: c1={c1:.4f}, c2={c2:.4f}, "
-                  f"rms={change:.6f}")
+            print(f"  Iter {it:4d}: c1={c1:.4f}, c2={c2:.4f}, "f"rms={change:.6f}")
         if change < tol and it > 10:
             print(f"  Converged at iteration {it}")
             break
@@ -102,13 +62,7 @@ def chan_vese(u0, phi0, mu=0.25, nu=0, lambda1=1.0, lambda2=1.0,
     seg = (phi >= 0).astype(np.uint8)
     return phi, c1, c2, seg, history
 
-
-# ----------------------------------------------------------------
-# Initialisation
-# ----------------------------------------------------------------
-
 def init_circle(shape, center=None, radius=None):
-    """Signed distance to a circle, POSITIVE inside."""
     h, w = shape
     if center is None:
         center = (h // 2, w // 2)
@@ -119,22 +73,15 @@ def init_circle(shape, center=None, radius=None):
 
 
 def init_checkerboard(shape, n=5):
-    """Checkerboard initialisation — many small regions."""
     h, w = shape
     y, x = np.ogrid[:h, :w]
     return np.sin(np.pi * n * x / w) * np.sin(np.pi * n * y / h)
-
-
-# ----------------------------------------------------------------
-# Test images
-# ----------------------------------------------------------------
 
 def create_test_images():
     images = {}
     np.random.seed(42)
     y100, x100 = np.ogrid[:100, :100]
 
-    # 1 — Noisy shapes (circle + square with hole)
     img1 = np.ones((100, 100)) * 0.7
     img1[(x100 - 35)**2 + (y100 - 35)**2 < 15**2] = 0.3
     rect = (x100 > 55) & (x100 < 85) & (y100 > 55) & (y100 < 85)
@@ -144,29 +91,18 @@ def create_test_images():
     img1 += np.random.normal(0, 0.08, img1.shape)
     img1 = np.clip(img1, 0, 1)
     images['noisy_shapes'] = img1
-
-    # 2 — Smooth blob (no edges — classical methods fail)
     r = np.sqrt((x100 - 50)**2 + (y100 - 50)**2)
     img2 = np.exp(-r**2 / (2 * 20**2))
     images['smooth_blob'] = img2
-
-    # 3 — Two regions (sharp square)
     img3 = np.zeros((100, 100))
     img3[25:75, 25:75] = 1.0
     images['two_regions'] = img3
-
-    # 4 — Three disks
     img4 = np.zeros((100, 100))
     for cy, cx in [(30, 25), (30, 75), (70, 50)]:
         img4[(x100 - cx)**2 + (y100 - cy)**2 < 14**2] = 1.0
     images['three_disks'] = img4
 
     return images
-
-
-# ----------------------------------------------------------------
-# Demo
-# ----------------------------------------------------------------
 
 def run_demo():
     print("=" * 60)
@@ -222,7 +158,6 @@ def run_demo():
     plt.savefig('output/chan_vese_demo.png', dpi=150, bbox_inches='tight')
     print("\nSaved output/chan_vese_demo.png")
 
-    # ------ Evolution for noisy_shapes ------
     print("\n" + "=" * 60)
     print("Generating evolution visualisation...")
     print("=" * 60)
